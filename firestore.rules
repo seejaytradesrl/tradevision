@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (Firebase Auth UID)
+    // Fields:
+    //   - displayName: string (required)
+    //   - email: string (required, format: email)
+    //   - photoURL: string (optional)
+    //   - role: string (required, enum: ['user', 'admin'])
+    //
+    // Collection: trades
+    // Document ID: tradeId (Auto-generated)
+    // Fields:
+    //   - symbol: string (required)
+    //   - entryPrice: number (required, positive)
+    //   - quantity: number (required, positive)
+    //   - type: string (required, enum: ['buy', 'sell'])
+    //   - status: string (required, enum: ['open', 'closed'])
+    //   - userId: string (required, matches Auth UID)
+    //   - createdAt: timestamp (required)
+    //   - closedAt: timestamp (optional)
+    //   - exitPrice: number (optional, positive)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "gamblinggoneviral@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['displayName', 'email', 'photoURL', 'role']) &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100 &&
+             isValidEmail(data.email) &&
+             data.role in ['user', 'admin'];
+    }
+
+    function isValidTrade(data) {
+      return hasOnlyAllowedFields(['symbol', 'entryPrice', 'quantity', 'type', 'status', 'userId', 'createdAt', 'closedAt', 'exitPrice', 'stopLoss', 'takeProfit']) &&
+             data.symbol is string && data.symbol.size() > 0 && data.symbol.size() < 10 &&
+             data.entryPrice is number && data.entryPrice > 0 &&
+             data.quantity is number && data.quantity > 0 &&
+             data.stopLoss is number && data.stopLoss > 0 &&
+             data.takeProfit is number && data.takeProfit > 0 &&
+             data.type in ['buy', 'sell'] &&
+             data.status in ['open', 'closed'] &&
+             data.userId == request.auth.uid &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == 'user' || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /trades/{tradeId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && isValidTrade(request.resource.data);
+      allow update: if isAuthenticated() && isValidTrade(request.resource.data) && (isDocOwner() || isAdmin());
+      allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
+    }
+  }
+}
